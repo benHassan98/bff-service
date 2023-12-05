@@ -8,10 +8,11 @@ const app = express();
 const APP_URL = process.env.APP_URL || 'http://localhost:5173';
 const REDIRECT_URI = process.env.REDIRECT_URI || 'http://localhost:8888/oauth2/code';
 const AUTH_SERVER = process.env.AUTH_SERVER || "http://localhost:8081";
+const ACCOUNT_SERVICE = process.env.ACCOUNT_SERVICE || "http://localhost:8082";
 const CLIENT_ID = process.env.CLIENT_ID || "oidc-client";
 const CLIENT_SECRET = process.env.CLIENT_SECRET || "4S4Hr..G0!JWOIh&";
 const PORT = process.env.PORT || '8888';
-
+const AUTH_VALUE = 'Basic ' + Buffer.from(CLIENT_ID +":"+CLIENT_SECRET).toString('base64');
 
 console.log(PORT);
 console.log(APP_URL);
@@ -30,13 +31,119 @@ app.use(bodyParser.json());
 app.use(cookieParser());
 
 
+
+
+
+const getUser = async (email, headers)=>{
+
+    const accountRes = await axios.get(ACCOUNT_SERVICE+"/email/"+email,{
+        headers:{...headers},
+        withCredentials:true
+    });
+
+    if(accountRes.status === 401){
+        const refRes = await axios.post(AUTH_SERVER+'/oauth2/token',{
+            client_id:CLIENT_ID,
+            grant_type:'refresh_token',
+            refresh_token:headers['refresh_token']
+        }, {
+            headers: {...headers},
+            withCredentials:true
+
+        });
+
+
+        const newHeaders = {
+            ...headers,
+            'refresh_token':refRes.data['refresh_token']
+        };
+
+        return getUser(email, newHeaders);
+    }
+
+    return {...headers, account:accountRes.data};
+
+};
+const getEmail = async (headers)=>{
+
+    const res = await axios.get(AUTH_SERVER+'/getEmail',{
+        headers:{...headers},
+        withCredentials:true
+    });
+
+    console.log("email Data:  ",res.data);
+
+    if(res.status === 401){
+
+        const refRes = await axios.post(AUTH_SERVER+'/oauth2/token',{
+            client_id:CLIENT_ID,
+            grant_type:'refresh_token',
+            refresh_token:headers['refresh_token']
+        }, {
+            headers: {...headers},
+            withCredentials:true
+
+        });
+
+        console.log("refRes: ",refRes.data);
+
+        const newHeaders = {
+            ...headers,
+            'refresh_token': refRes.data['refresh_token'],
+            'access_token': refRes.data['access_token'],
+            'Authorization' : `Bearer  ${refRes.data['access_token']}`,
+        };
+
+        console.log("newHeaders: ",newHeaders);
+
+
+        return getEmail(newHeaders);
+
+    }
+
+    return {...headers,email:res.data};
+
+};
+
+app.post("/getUser", async(req,res)=>{
+
+    console.log("reqBody:  ",req.body);
+    const JSESSIONID = req.cookies.JSESSIONID;
+
+    const headers = {
+        'Authorization' : `Bearer  ${req.body.access_token}`,
+        Cookie:`JSESSIONID=${JSESSIONID};`,
+        'refresh_token':req.cookies.refresh_token,
+        'access_token': req.body.access_token
+    };
+
+   const {email, ...newHeaders} = await getEmail(headers);
+    console.log("email:  ",email);
+    console.log("headers:   ",newHeaders);
+
+   const {account, ...finalHeaders} = await getUser(email, newHeaders);
+
+   console.log("account: ",account);
+   console.log("finalHeaders: ",finalHeaders);
+
+    res.cookie('refresh_token',finalHeaders['refresh_token'],{httpOnly:true});
+    res.cookie("JSESSIONID",JSESSIONID,{httpOnly:true});
+
+    res.send({
+       account,
+       access_token:finalHeaders['access_token']
+   });
+
+
+});
+
+
+
 app.get("/oauth2/code",(req,res)=>{
     console.log(req.headers);
     console.log(req.query);
     res.status(200).send(req.query.code);
 });
-
-
 
 
 app.post('/login',async (req,res)=>{
@@ -121,10 +228,6 @@ app.post('/login',async (req,res)=>{
 
 });
 
-
-
-
-
 app.get('/refresh',async (req,res)=>{
     const oldToken = req.cookies.refresh_token;
     const authValue = 'Basic ' + Buffer.from(CLIENT_ID +":"+CLIENT_SECRET).toString('base64');
@@ -183,7 +286,9 @@ app.post('/logout',async (req,res)=>{
     res.status(200).send();
 });
 
-
+app.get("/err",(req,res)=>{
+    res.status(404).send();
+});
 
 
 
