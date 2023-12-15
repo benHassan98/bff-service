@@ -3,6 +3,7 @@ const axios = require('axios');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const bodyParser = require('body-parser');
+const logger = require('morgan');
 const app = express();
 
 const APP_URL = process.env.APP_URL || 'http://localhost:5173';
@@ -14,13 +15,6 @@ const CLIENT_SECRET = process.env.CLIENT_SECRET || "4S4Hr..G0!JWOIh&";
 const PORT = process.env.PORT || '8888';
 const AUTH_VALUE = 'Basic ' + Buffer.from(CLIENT_ID +":"+CLIENT_SECRET).toString('base64');
 
-console.log(PORT);
-console.log(APP_URL);
-console.log(AUTH_SERVER);
-console.log(CLIENT_SECRET);
-console.log(CLIENT_ID);
-
-
 
 app.use(cors({
     origin:APP_URL,
@@ -29,102 +23,124 @@ app.use(cors({
 app.use(bodyParser.urlencoded({ extended: false }))
 app.use(bodyParser.json());
 app.use(cookieParser());
-
+app.use(logger('dev'));
 
 
 
 
 const getUser = async (email, headers)=>{
+    let accountRes;
+    try{
 
-    const accountRes = await axios.get(ACCOUNT_SERVICE+"/email/"+email,{
-        headers:{...headers},
-        withCredentials:true
-    });
-
-    if(accountRes.status === 401){
-        const refRes = await axios.post(AUTH_SERVER+'/oauth2/token',{
-            client_id:CLIENT_ID,
-            grant_type:'refresh_token',
-            refresh_token:headers['refresh_token']
-        }, {
-            headers: {...headers},
-            withCredentials:true
-
+        accountRes = await axios.get(ACCOUNT_SERVICE+"/email/"+email,{
+            headers:{
+                "Content-Type":"application/json",
+                "Authorization":headers['Authorization']
+            },
         });
 
-
-        const newHeaders = {
-            ...headers,
-            'refresh_token':refRes.data['refresh_token']
-        };
-
-        return getUser(email, newHeaders);
     }
+    catch (e) {
+
+        if(e.response.status === 401){
+            const refRes = await axios.post(AUTH_SERVER+'/oauth2/token',{
+                client_id:CLIENT_ID,
+                grant_type:'refresh_token',
+                refresh_token:headers['refresh_token']
+            }, {
+                headers: {...headers},
+                withCredentials:true
+
+            });
+
+
+            const newHeaders = {
+                ...headers,
+                'refresh_token':refRes.data['refresh_token']
+            };
+
+            return getUser(email, newHeaders);
+        }
+
+        return {status:err.response.status};
+
+    }
+
 
     return {...headers, account:accountRes.data};
 
 };
 const getEmail = async (headers)=>{
 
-    const res = await axios.get(AUTH_SERVER+'/getEmail',{
-        headers:{...headers},
-        withCredentials:true
-    });
+    let res;
 
-    console.log("email Data:  ",res.data);
-
-    if(res.status === 401){
-
-        const refRes = await axios.post(AUTH_SERVER+'/oauth2/token',{
-            client_id:CLIENT_ID,
-            grant_type:'refresh_token',
-            refresh_token:headers['refresh_token']
-        }, {
-            headers: {...headers},
-            withCredentials:true
-
-        });
-
-        console.log("refRes: ",refRes.data);
-
-        const newHeaders = {
-            ...headers,
-            'refresh_token': refRes.data['refresh_token'],
-            'access_token': refRes.data['access_token'],
-            'Authorization' : `Bearer  ${refRes.data['access_token']}`,
-        };
-
-        console.log("newHeaders: ",newHeaders);
+     try{
+         res = await axios.get(AUTH_SERVER+'/getEmail',{
+             headers:{...headers},
+             withCredentials:true
+         });
 
 
-        return getEmail(newHeaders);
+     }
+     catch (e) {
+         if(e.response.status === 401){
 
-    }
+             const refRes = await axios.post(AUTH_SERVER+'/oauth2/token',{
+                 client_id:CLIENT_ID,
+                 grant_type:'refresh_token',
+                 refresh_token:headers['refresh_token']
+             }, {
+                 headers: {...headers},
+                 withCredentials:true
 
+             });
+
+
+             const newHeaders = {
+                 ...headers,
+                 'refresh_token': refRes.data['refresh_token'],
+                 'access_token': refRes.data['access_token'],
+                 'Authorization' : `Bearer ${refRes.data['access_token']}`,
+             };
+
+             return getEmail(newHeaders);
+
+         }
+
+         return {
+             status:e.response.status
+         };
+
+     }
     return {...headers,email:res.data};
 
 };
 
 app.post("/getUser", async(req,res)=>{
 
-    console.log("reqBody:  ",req.body);
     const JSESSIONID = req.cookies.JSESSIONID;
 
     const headers = {
-        'Authorization' : `Bearer  ${req.body.access_token}`,
+        'Authorization' : `Bearer ${req.body.access_token}`,
         Cookie:`JSESSIONID=${JSESSIONID};`,
         'refresh_token':req.cookies.refresh_token,
         'access_token': req.body.access_token
     };
 
-   const {email, ...newHeaders} = await getEmail(headers);
-    console.log("email:  ",email);
-    console.log("headers:   ",newHeaders);
+   const {email, emailStatus, ...newHeaders} = await getEmail(headers);
 
-   const {account, ...finalHeaders} = await getUser(email, newHeaders);
+    if(!email){
+        res.status(emailStatus).send();
+        return;
+    }
 
-   console.log("account: ",account);
-   console.log("finalHeaders: ",finalHeaders);
+   const {account, accountStatus, ...finalHeaders} = await getUser(email, newHeaders);
+
+    if(!account){
+        res.status(accountStatus).send();
+        return;
+    }
+
 
     res.cookie('refresh_token',finalHeaders['refresh_token'],{httpOnly:true});
     res.cookie("JSESSIONID",JSESSIONID,{httpOnly:true});
@@ -140,40 +156,27 @@ app.post("/getUser", async(req,res)=>{
 
 
 app.get("/oauth2/code",(req,res)=>{
-    console.log(req.headers);
-    console.log(req.query);
+
     res.status(200).send(req.query.code);
 });
 
 
 app.post('/login',async (req,res)=>{
 
-    console.log(req.body.email);
-    console.log(req.body.password);
     let loginResponse, codeResponse, tokenResponse, cookieName = "JSESSIONID", cookieValue;
-
-    const authValue = 'Basic ' + Buffer.from(CLIENT_ID+":"+CLIENT_SECRET).toString('base64');
 
 
     try{
         loginResponse = await axios.post(AUTH_SERVER+"/perform_login",{
-            email:'user',
-            password:'password'
+            email:req.body.email,
+            password:req.body.password
         });
-
-        console.log(loginResponse.headers);
-        console.log(loginResponse.data);
-
 
         cookieValue = loginResponse.headers["set-cookie"].find(cookie => cookie.includes(cookieName))
             ?.match(new RegExp(`^${cookieName}=(.+?);`))
             ?.[1];
     }
     catch (exception) {
-        console.log(exception);
-        console.log(exception.response.status);
-        console.log(exception.response.data);
-
         res.status(exception.response.status).send(exception.response.data);
         return;
     }
@@ -187,7 +190,7 @@ app.post('/login',async (req,res)=>{
                 },
                 withCredentials:true
             });
-        console.log("codeResponse: ",codeResponse.data);
+
 
         tokenResponse = await axios.post(AUTH_SERVER+'/oauth2/token',{
             code:codeResponse.data,
@@ -195,7 +198,7 @@ app.post('/login',async (req,res)=>{
             redirect_uri:REDIRECT_URI
         },{
             headers: {
-                'Authorization' : authValue,
+                'Authorization' : AUTH_VALUE,
                 Cookie:`JSESSIONID=${cookieValue};`,
                 "Content-Type":"application/x-www-form-urlencoded"
             },
@@ -212,8 +215,7 @@ app.post('/login',async (req,res)=>{
 
 
 
-    console.log("codeResponse:   ",codeResponse.status);
-    console.log("codeResponse:   ",codeResponse.data);
+
 
 
     const access_token = tokenResponse.data.access_token;
@@ -229,8 +231,8 @@ app.post('/login',async (req,res)=>{
 });
 
 app.get('/refresh',async (req,res)=>{
+
     const oldToken = req.cookies.refresh_token;
-    const authValue = 'Basic ' + Buffer.from(CLIENT_ID +":"+CLIENT_SECRET).toString('base64');
     let response;
 
     try{
@@ -240,7 +242,7 @@ app.get('/refresh',async (req,res)=>{
             refresh_token:oldToken
         }, {
             headers: {
-                'Authorization' : authValue,
+                'Authorization' : AUTH_VALUE,
                 Cookie:`JSESSIONID=${req.cookies.JSESSIONID};`,
                 "Content-Type":"application/x-www-form-urlencoded"
             },
@@ -250,7 +252,7 @@ app.get('/refresh',async (req,res)=>{
     }
     catch (exception){
         console.log(exception);
-        res.status(500).send();
+        res.status(exception.response.status).send();
         return;
     }
 
@@ -269,14 +271,15 @@ app.post('/logout',async (req,res)=>{
     try{
         await axios.get(AUTH_SERVER+'/perform_logout',{
             headers: {
+                "Authorization":`Bearer ${req.body.access_token}`,
                 Cookie:`JSESSIONID=${req.cookies.JSESSIONID};`
             },
             withCredentials:true
         });
     }
-    catch (exception){
-        console.log(exception);
-        res.status(500).send();
+    catch (e){
+        console.log(e);
+        res.status(e.response.status).send();
         return;
     }
 
@@ -284,10 +287,6 @@ app.post('/logout',async (req,res)=>{
     res.clearCookie('JSESSIONID',{httpOnly:true});
 
     res.status(200).send();
-});
-
-app.get("/err",(req,res)=>{
-    res.status(404).send();
 });
 
 
