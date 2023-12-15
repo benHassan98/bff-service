@@ -291,4 +291,8 @@ app.post('/logout',async (req,res)=>{
 
 
 
-app.listen(PORT);
+app.listen(PORT,()=>{
+    console.log(PORT);
+    console.log(APP_URL);
+    console.log(ACCOUNT_SERVICE);
+});
