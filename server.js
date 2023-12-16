@@ -289,10 +289,17 @@ app.post('/logout',async (req,res)=>{
     res.status(200).send();
 });
 
+app.get("/",(req,res)=>{
+    res.send({msg:"hello"});
+});
 
 
 app.listen(PORT,()=>{
-    console.log(PORT);
     console.log(APP_URL);
+    console.log(REDIRECT_URI);
+    console.log(AUTH_SERVER);
     console.log(ACCOUNT_SERVICE);
+    console.log(CLIENT_ID);
+    console.log(CLIENT_SECRET);
+    console.log(PORT);
 });
