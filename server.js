@@ -9,7 +9,7 @@ const app = express();
 const APP_URL = process.env.APP_URL || 'http://localhost:5173';
 const REDIRECT_URI = process.env.REDIRECT_URI || 'http://localhost:8888/oauth2/code';
 const AUTH_SERVER = process.env.AUTH_SERVER || "http://localhost:8081";
-const ACCOUNT_SERVICE = process.env.ACCOUNT_SERVICE || "http://localhost:8082";
+const ACCOUNT_SERVICE = process.env.ACCOUNT_SERVICE || "http://localhost:8080/accountService";
 const CLIENT_ID = process.env.CLIENT_ID || "oidc-client";
 const CLIENT_SECRET = process.env.CLIENT_SECRET || "4S4Hr..G0!JWOIh&";
 const PORT = process.env.PORT || '8888';
@@ -43,7 +43,8 @@ const getUser = async (email, headers)=>{
     catch (e) {
 
         if(e.response.status === 401){
-            const refRes = await axios.post(AUTH_SERVER+'/oauth2/token',{
+            try{
+                const refRes = await axios.post(AUTH_SERVER+'/oauth2/token',{
                 client_id:CLIENT_ID,
                 grant_type:'refresh_token',
                 refresh_token:headers['refresh_token']
@@ -60,10 +61,14 @@ const getUser = async (email, headers)=>{
             };
 
             return getUser(email, newHeaders);
+
+        }
+            catch(refE){
+                return {accountStatus:refE.response.status};
+            }
         }
 
-        return {status:err.response.status};
-
+           return {accountStatus:e.response.status};
     }
 
 
@@ -83,9 +88,11 @@ const getEmail = async (headers)=>{
 
      }
      catch (e) {
+      
          if(e.response.status === 401){
 
-             const refRes = await axios.post(AUTH_SERVER+'/oauth2/token',{
+             try{
+                const refRes = await axios.post(AUTH_SERVER+'/oauth2/token',{
                  client_id:CLIENT_ID,
                  grant_type:'refresh_token',
                  refresh_token:headers['refresh_token']
@@ -105,37 +112,104 @@ const getEmail = async (headers)=>{
 
              return getEmail(newHeaders);
 
-         }
-
-         return {
-             status:e.response.status
+             }
+             catch(refE){
+                console.log("refE:  ",refE);
+                return {
+             emailStatus:refE.response.status
          };
 
+             }
+
+         }
+         return {
+            emailStatus:e.response.status
+         };
+
+         
      }
     return {...headers,email:res.data};
 
 };
 
+const getTokens = async (cookieValue)=>{
+
+    const codeResponse = await axios.get(AUTH_SERVER+`/oauth2/authorize?client_id=${CLIENT_ID}&response_type=code&redirect_uri=${REDIRECT_URI}&scope=openid`
+            ,{
+                headers:{
+                    Cookie:`JSESSIONID=${cookieValue};`
+                },
+                withCredentials:true
+            });
+
+
+const tokenResponse = await axios.post(AUTH_SERVER+'/oauth2/token',{
+            code:codeResponse.data,
+            grant_type:'authorization_code',
+            redirect_uri:REDIRECT_URI
+        },{
+            headers: {
+                'Authorization' : AUTH_VALUE,
+                Cookie:`JSESSIONID=${cookieValue};`,
+                "Content-Type":"application/x-www-form-urlencoded"
+            },
+            withCredentials:true
+        });
+
+    const access_token = tokenResponse.data.access_token;
+    const refresh_token = tokenResponse.data.refresh_token;
+
+
+
+return {
+    access_tokenResponse:access_token,
+    refresh_tokenResponse:refresh_token
+};
+
+};
+
+
 app.post("/getUser", async(req,res)=>{
 
     const JSESSIONID = req.cookies.JSESSIONID;
+    let access_token = req.body.access_token;
+    let refresh_token = req.cookies.refresh_token;
+    
+    if(!JSESSIONID){
+        res.status(403).send();
+       }
+
+    if(!access_token){
+
+        try{
+            const {access_tokenResponse, refresh_tokenResponse} = await getTokens(JSESSIONID);
+
+            access_token = access_tokenResponse;
+            refresh_token = refresh_tokenResponse;
+        }
+        catch(e){
+            res.status(e.response.status).send();
+        }
+
+    }
+
 
     const headers = {
-        'Authorization' : `Bearer ${req.body.access_token}`,
+        'Authorization' : `Bearer ${access_token}`,
         Cookie:`JSESSIONID=${JSESSIONID};`,
-        'refresh_token':req.cookies.refresh_token,
-        'access_token': req.body.access_token
+        'refresh_token':refresh_token,
+        'access_token': access_token
     };
 
    const {email, emailStatus, ...newHeaders} = await getEmail(headers);
-
+   console.log("email: ",email);
     if(!email){
         res.status(emailStatus).send();
         return;
     }
 
    const {account, accountStatus, ...finalHeaders} = await getUser(email, newHeaders);
-
+   console.log("account: ",account);
     if(!account){
         res.status(accountStatus).send();
         return;
@@ -163,7 +237,7 @@ app.get("/oauth2/code",(req,res)=>{
 
 app.post('/login',async (req,res)=>{
 
-    let loginResponse, codeResponse, tokenResponse, cookieName = "JSESSIONID", cookieValue;
+    let loginResponse, access_token, refresh_token, cookieName = "JSESSIONID", cookieValue;
 
 
     try{
@@ -183,43 +257,18 @@ app.post('/login',async (req,res)=>{
 
     try{
 
-        codeResponse = await axios.get(AUTH_SERVER+`/oauth2/authorize?client_id=${CLIENT_ID}&response_type=code&redirect_uri=${REDIRECT_URI}&scope=openid`
-            ,{
-                headers:{
-                    Cookie:`${cookieName}=${cookieValue};`
-                },
-                withCredentials:true
-            });
+            const {access_tokenResponse, refresh_tokenResponse} = await getTokens(cookieValue);
 
-
-        tokenResponse = await axios.post(AUTH_SERVER+'/oauth2/token',{
-            code:codeResponse.data,
-            grant_type:'authorization_code',
-            redirect_uri:REDIRECT_URI
-        },{
-            headers: {
-                'Authorization' : AUTH_VALUE,
-                Cookie:`JSESSIONID=${cookieValue};`,
-                "Content-Type":"application/x-www-form-urlencoded"
-            },
-            withCredentials:true
-        });
-
+            access_token = access_tokenResponse;
+            refresh_token = refresh_tokenResponse;
 
     }
     catch (exception){
-        res.status(500).send();
+        res.status(exception.response.status).send();
         return;
     }
 
 
-
-
-
-
-
-    const access_token = tokenResponse.data.access_token;
-    const refresh_token = tokenResponse.data.refresh_token;
 
     res.cookie('refresh_token',refresh_token,{httpOnly:true});
     res.cookie(cookieName,cookieValue,{httpOnly:true});
