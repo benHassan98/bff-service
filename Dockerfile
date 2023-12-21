@@ -4,7 +4,7 @@ WORKDIR /usr/src/app
 
 COPY . .
 
-RUN npm intall
+RUN npm install
 
 EXPOSE 8080
 
