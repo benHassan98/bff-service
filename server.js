@@ -338,10 +338,6 @@ app.post('/logout',async (req,res)=>{
     res.status(200).send();
 });
 
-app.get("/",(req,res)=>{
-    res.send({msg:"hello"});
-});
-
 
 app.listen(PORT,()=>{
     console.log(APP_URL);
