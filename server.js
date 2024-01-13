@@ -348,3 +348,6 @@ app.listen(PORT,()=>{
     console.log(CLIENT_SECRET);
     console.log(PORT);
 });
+
+module.exports = app;
+
