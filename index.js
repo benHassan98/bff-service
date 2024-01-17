@@ -338,6 +338,10 @@ app.post('/logout',async (req,res)=>{
     res.status(200).send();
 });
 
+app.get("/health",(req, res)=>{
+    res.send({status: "UP"});
+});
+
 
 app.listen(PORT,()=>{
     console.log(APP_URL);
